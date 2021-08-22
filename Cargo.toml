@@ -1,0 +1,17 @@
+[package]
+authors = ["Xiang 'Alsein' Yuheng <xyh951115@live.com>"]
+description = "An async sugar for virtual timeline."
+edition = "2018"
+license-file = "LICENSE"
+name = "timewrap"
+repository = "https://github.com/AlseinX/timewrap"
+version = "0.2.0"
+
+[features]
+default = []
+drive_block = ["futures"]
+
+[dependencies]
+futures = {version = "0.3", optional = true}
+hashbrown = "0.11"
+parking_lot = "0.11"
