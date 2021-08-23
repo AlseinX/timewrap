@@ -38,6 +38,8 @@ where
     state: S,
     is_by_time: AtomicBool,
     current_id: AtomicUsize,
+    #[cfg(feature = "drive_shared")]
+    shared_lock: futures::lock::Mutex<()>,
 }
 
 impl<T, S> Deref for Timewrap<T, S>
@@ -146,6 +148,8 @@ where
             state,
             is_by_time: AtomicBool::new(false),
             current_id: AtomicUsize::new(0),
+            #[cfg(feature = "drive_shared")]
+            shared_lock: futures::lock::Mutex::new(()),
         }
     }
 
@@ -183,7 +187,7 @@ where
         this.waitings.push(Waiting { id, time })
     }
 
-    pub async fn drive(&mut self, time: T) {
+    async fn inner_drive(&self, time: T) {
         let mut this = self.data.lock();
         while let Some(w) = this.waitings.peek() {
             if w.time > time {
@@ -205,9 +209,26 @@ where
         this.current = time;
     }
 
+    pub async fn drive(&mut self, time: T) {
+        self.inner_drive(time).await
+    }
+
+    #[cfg(feature = "drive_shared")]
+    pub async fn drive_shared(&self, time: T) {
+        let lock = self.shared_lock.lock().await;
+        self.inner_drive(time).await;
+        drop(lock);
+    }
+
     #[cfg(feature = "drive_block")]
     pub fn drive_block(&mut self, time: T) {
         futures::executor::block_on(self.drive(time));
+    }
+
+    #[cfg(feature = "drive_shared")]
+    #[cfg(feature = "drive_block")]
+    pub fn drive_shared_block(&self, time: T) {
+        futures::executor::block_on(self.drive_shared(time));
     }
 }
 

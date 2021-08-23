@@ -5,6 +5,6 @@ extern crate alloc;
 mod timewrap;
 pub use crate::timewrap::*;
 
-#[cfg(feature = "drive_block")]
+#[cfg(feature = "full")]
 #[cfg(test)]
 mod tests;

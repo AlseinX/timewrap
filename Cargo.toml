@@ -5,11 +5,13 @@ edition = "2018"
 license-file = "LICENSE"
 name = "timewrap"
 repository = "https://github.com/AlseinX/timewrap"
-version = "0.2.2"
+version = "0.2.3"
 
 [features]
 default = []
 drive_block = ["futures"]
+drive_shared = ["futures"]
+full = ["drive_block", "drive_shared"]
 
 [dependencies]
 futures = {version = "0.3", optional = true}

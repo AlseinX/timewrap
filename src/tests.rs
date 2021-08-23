@@ -2,7 +2,7 @@ use crate::{async_fn, Timewrap};
 
 #[test]
 fn it_works() {
-    let mut timewrap = Timewrap::new_with_state("x");
+    let timewrap = Timewrap::new_with_state("x");
     timewrap.spawn(async_fn!(|timewrap| {
         timewrap.spawn(move |timewrap| {
             Box::pin(async move {
@@ -18,5 +18,5 @@ fn it_works() {
             println!("b {} {}", i, timewrap.state());
         }
     }));
-    timewrap.drive_block(200);
+    timewrap.drive_shared_block(200);
 }
