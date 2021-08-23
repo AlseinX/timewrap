@@ -37,6 +37,13 @@ pub struct Timewrap<T, S = ()>
 where
     T: Time,
 {
+    data: Box<TimewrapSharedData<T, S>>,
+}
+
+pub struct TimewrapSharedData<T, S>
+where
+    T: Time,
+{
     data: Mutex<TimewrapData<T>>,
     state: S,
     is_by_time: AtomicBool,
@@ -51,7 +58,7 @@ where
 {
     type Target = S;
     fn deref(&self) -> &Self::Target {
-        &self.state
+        &self.data.state
     }
 }
 
@@ -68,7 +75,7 @@ pub struct TimewrapHandle<'a, T, S = ()>
 where
     T: Time,
 {
-    target: &'a Timewrap<T, S>,
+    target: &'a TimewrapSharedData<T, S>,
 }
 
 impl<'a, T, S> Clone for TimewrapHandle<'a, T, S>
@@ -143,34 +150,36 @@ where
 {
     pub fn new_with_time_and_state(time: T, state: S) -> Self {
         Self {
-            data: Mutex::new(TimewrapData {
-                current: time,
-                tasks: HashMap::new(),
-                waitings: BinaryHeap::new(),
+            data: Box::new(TimewrapSharedData {
+                data: Mutex::new(TimewrapData {
+                    current: time,
+                    tasks: HashMap::new(),
+                    waitings: BinaryHeap::new(),
+                }),
+                state,
+                is_by_time: AtomicBool::new(false),
+                current_id: AtomicUsize::new(0),
+                #[cfg(feature = "drive_shared")]
+                shared_lock: futures::lock::Mutex::new(()),
             }),
-            state,
-            is_by_time: AtomicBool::new(false),
-            current_id: AtomicUsize::new(0),
-            #[cfg(feature = "drive_shared")]
-            shared_lock: futures::lock::Mutex::new(()),
         }
     }
 
     pub fn state(&self) -> &S {
-        &self.state
+        &self.data.state
     }
 
     pub fn into_state(self) -> S {
-        self.state
+        self.data.state
     }
 
     fn spawn_inner<'a>(
-        &'a self,
+        this: &'a TimewrapSharedData<T, S>,
         f: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
         time: Option<T>,
     ) {
         let id = as_ptr(f.as_ref().get_ref()) as *const () as usize;
-        let mut this = self.data.lock();
+        let mut this = this.data.lock();
         let this = &mut *this;
         this.tasks.insert(id, unsafe { mem::transmute(f) });
         this.waitings.push(Waiting {
@@ -185,7 +194,7 @@ where
             TimewrapHandle<'a, T, S>,
         ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     {
-        self.spawn_inner(f(TimewrapHandle { target: self }), None);
+        Self::spawn_inner(&self.data, f(TimewrapHandle { target: &self.data }), None);
     }
 
     pub fn spawn_at<F>(&self, time: T, f: F)
@@ -194,11 +203,15 @@ where
             TimewrapHandle<'a, T, S>,
         ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     {
-        self.spawn_inner(f(TimewrapHandle { target: self }), Some(time));
+        Self::spawn_inner(
+            &self.data,
+            f(TimewrapHandle { target: &self.data }),
+            Some(time),
+        );
     }
 
     async fn inner_drive(&self, time: T) {
-        let mut this = self.data.lock();
+        let mut this = self.data.data.lock();
         while let Some(w) = this.waitings.peek() {
             if w.time > time {
                 break;
@@ -207,11 +220,13 @@ where
             this.current = w.time;
             let mut task = this.tasks.remove(&w.id).unwrap();
             drop(this);
-            self.is_by_time.store(false, Ordering::Relaxed);
-            self.current_id.store(w.id, Ordering::Relaxed);
-            let pause =
-                PauseWhen(&mut task, || self.is_by_time.swap(false, Ordering::Relaxed)).await;
-            this = self.data.lock();
+            self.data.is_by_time.store(false, Ordering::Relaxed);
+            self.data.current_id.store(w.id, Ordering::Relaxed);
+            let pause = PauseWhen(&mut task, || {
+                self.data.is_by_time.swap(false, Ordering::Relaxed)
+            })
+            .await;
+            this = self.data.data.lock();
             if pause.is_pending() {
                 this.tasks.insert(w.id, task);
             };
@@ -225,7 +240,7 @@ where
 
     #[cfg(feature = "drive_shared")]
     pub async fn drive_shared(&self, time: T) {
-        let lock = self.shared_lock.lock().await;
+        let lock = self.data.shared_lock.lock().await;
         self.inner_drive(time).await;
         drop(lock);
     }
@@ -254,11 +269,11 @@ where
     }
 
     pub fn spawn(self, f: impl Future<Output = ()> + Send + 'a) {
-        self.target.spawn_inner(Box::pin(f), None);
+        Timewrap::spawn_inner(self.target, Box::pin(f), None);
     }
 
     pub fn spawn_at(self, f: impl Future<Output = ()> + Send + 'a, time: T) {
-        self.target.spawn_inner(Box::pin(f), Some(time));
+        Timewrap::spawn_inner(self.target, Box::pin(f), Some(time));
     }
 
     pub fn state(self) -> &'a S {
@@ -283,7 +298,7 @@ pub struct At<'a, T, S>
 where
     T: Time,
 {
-    timewrap: &'a Timewrap<T, S>,
+    timewrap: &'a TimewrapSharedData<T, S>,
     time: T,
 }
 

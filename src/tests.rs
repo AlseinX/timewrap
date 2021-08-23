@@ -21,7 +21,7 @@ fn it_works() {
             write!(result, "b{}", i).unwrap();
         }
     }));
-    timewrap.drive_shared_block(105);
+    timewrap.drive_shared_block(35);
     let result = timewrap.into_state().into_inner();
     assert_eq!(result, "a0b0a1b1a2b2");
 }

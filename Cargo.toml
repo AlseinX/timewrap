@@ -5,7 +5,7 @@ edition = "2018"
 license-file = "LICENSE"
 name = "timewrap"
 repository = "https://github.com/AlseinX/timewrap"
-version = "0.3.0"
+version = "0.3.1"
 
 [features]
 default = []
