@@ -25,6 +25,9 @@ macro_rules! async_fn {
             alloc::boxed::Box::pin(async move {$body})
         }
     };
+    (||$body:expr) => {
+        async_fn!(| |$body);
+    };
 }
 
 pub trait Time: Ord + Clone {}
@@ -61,7 +64,7 @@ where
     waitings: BinaryHeap<Waiting<T>>,
 }
 
-pub struct TimewrapHandle<'a, T, S>
+pub struct TimewrapHandle<'a, T, S = ()>
 where
     T: Time,
 {
@@ -85,9 +88,9 @@ impl<'a, T, S> Deref for TimewrapHandle<'a, T, S>
 where
     T: Time,
 {
-    type Target = Timewrap<T, S>;
+    type Target = S;
     fn deref(&self) -> &Self::Target {
-        self.target
+        &self.target.state
     }
 }
 
@@ -157,34 +160,41 @@ where
         &self.state
     }
 
-    pub fn spawn<F>(&self, f: F)
-    where
-        F: for<'a> FnOnce(
-            TimewrapHandle<'a, T, S>,
-        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
-    {
-        let f = f(TimewrapHandle { target: self });
+    pub fn into_state(self) -> S {
+        self.state
+    }
+
+    fn spawn_inner<'a>(
+        &'a self,
+        f: Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+        time: Option<T>,
+    ) {
         let id = as_ptr(f.as_ref().get_ref()) as *const () as usize;
         let mut this = self.data.lock();
         let this = &mut *this;
         this.tasks.insert(id, unsafe { mem::transmute(f) });
         this.waitings.push(Waiting {
             id,
-            time: this.current.clone(),
+            time: time.unwrap_or_else(|| this.current.clone()),
         })
     }
 
-    pub fn spawn_on<F>(&self, time: T, f: F)
+    pub fn spawn<F>(&self, f: F)
     where
         F: for<'a> FnOnce(
             TimewrapHandle<'a, T, S>,
         ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     {
-        let f = f(TimewrapHandle { target: self });
-        let id = as_ptr(f.as_ref().get_ref()) as *const () as usize;
-        let mut this = self.data.lock();
-        this.tasks.insert(id, unsafe { mem::transmute(f) });
-        this.waitings.push(Waiting { id, time })
+        self.spawn_inner(f(TimewrapHandle { target: self }), None);
+    }
+
+    pub fn spawn_at<F>(&self, time: T, f: F)
+    where
+        F: for<'a> FnOnce(
+            TimewrapHandle<'a, T, S>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+    {
+        self.spawn_inner(f(TimewrapHandle { target: self }), Some(time));
     }
 
     async fn inner_drive(&self, time: T) {
@@ -241,6 +251,18 @@ where
             timewrap: self.target,
             time,
         }
+    }
+
+    pub fn spawn(self, f: impl Future<Output = ()> + Send + 'a) {
+        self.target.spawn_inner(Box::pin(f), None);
+    }
+
+    pub fn spawn_at(self, f: impl Future<Output = ()> + Send + 'a, time: T) {
+        self.target.spawn_inner(Box::pin(f), Some(time));
+    }
+
+    pub fn state(self) -> &'a S {
+        &self.target.state
     }
 }
 
