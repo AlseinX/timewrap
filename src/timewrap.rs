@@ -30,13 +30,24 @@ macro_rules! async_fn {
 pub trait Time: Ord + Clone {}
 impl<T> Time for T where Self: Ord + Clone {}
 
-pub struct Timewrap<T>
+pub struct Timewrap<T, S = ()>
 where
     T: Time,
 {
     data: Mutex<TimewrapData<T>>,
+    state: S,
     is_by_time: AtomicBool,
     current_id: AtomicUsize,
+}
+
+impl<T, S> Deref for Timewrap<T, S>
+where
+    T: Time,
+{
+    type Target = S;
+    fn deref(&self) -> &Self::Target {
+        &self.state
+    }
 }
 
 struct TimewrapData<T>
@@ -49,18 +60,18 @@ where
 }
 
 #[derive(Clone, Copy)]
-pub struct TimewrapHandle<'a, T>
+pub struct TimewrapHandle<'a, T, S>
 where
     T: Time,
 {
-    target: &'a Timewrap<T>,
+    target: &'a Timewrap<T, S>,
 }
 
-impl<'a, T> Deref for TimewrapHandle<'a, T>
+impl<'a, T, S> Deref for TimewrapHandle<'a, T, S>
 where
     T: Time,
 {
-    type Target = Timewrap<T>;
+    type Target = Timewrap<T, S>;
     fn deref(&self) -> &Self::Target {
         self.target
     }
@@ -70,43 +81,71 @@ fn as_ptr<T: ?Sized>(v: &T) -> *const T {
     v as *const T
 }
 
-impl<T> Default for Timewrap<T>
+impl<T, S> Default for Timewrap<T, S>
 where
     T: Time + Default,
+    S: Default,
 {
     fn default() -> Self {
         Self::new_with_time(Default::default())
     }
 }
 
-impl<T> Timewrap<T>
+impl<T, S> Timewrap<T, S>
 where
     T: Time + Default,
+    S: Default,
 {
     pub fn new() -> Self {
         Default::default()
     }
 }
 
-impl<T> Timewrap<T>
+impl<T, S> Timewrap<T, S>
+where
+    T: Time,
+    S: Default,
+{
+    pub fn new_with_time(time: T) -> Self {
+        Self::new_with_time_and_state(time, Default::default())
+    }
+}
+
+impl<T, S> Timewrap<T, S>
+where
+    T: Time + Default,
+{
+    pub fn new_with_state(state: S) -> Self {
+        Self::new_with_time_and_state(Default::default(), state)
+    }
+}
+
+impl<T, S> Timewrap<T, S>
 where
     T: Time,
 {
-    pub fn new_with_time(time: T) -> Self {
+    pub fn new_with_time_and_state(time: T, state: S) -> Self {
         Self {
             data: Mutex::new(TimewrapData {
                 current: time,
                 tasks: HashMap::new(),
                 waitings: BinaryHeap::new(),
             }),
+            state,
             is_by_time: AtomicBool::new(false),
             current_id: AtomicUsize::new(0),
         }
     }
 
+    pub fn state(&self) -> &S {
+        &self.state
+    }
+
     pub fn spawn<F>(&self, f: F)
     where
-        F: for<'a> FnOnce(TimewrapHandle<'a, T>) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+        F: for<'a> FnOnce(
+            TimewrapHandle<'a, T, S>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     {
         let f = f(TimewrapHandle { target: self });
         let id = as_ptr(f.as_ref().get_ref()) as *const () as usize;
@@ -121,7 +160,9 @@ where
 
     pub fn spawn_on<F>(&self, time: T, f: F)
     where
-        F: for<'a> FnOnce(TimewrapHandle<'a, T>) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
+        F: for<'a> FnOnce(
+            TimewrapHandle<'a, T, S>,
+        ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>>,
     {
         let f = f(TimewrapHandle { target: self });
         let id = as_ptr(f.as_ref().get_ref()) as *const () as usize;
@@ -158,11 +199,11 @@ where
     }
 }
 
-impl<'a, T> TimewrapHandle<'a, T>
+impl<'a, T, S> TimewrapHandle<'a, T, S>
 where
     T: Time,
 {
-    pub fn at(self, time: T) -> At<'a, T> {
+    pub fn at(self, time: T) -> At<'a, T, S> {
         At {
             timewrap: self.target,
             time,
@@ -170,11 +211,11 @@ where
     }
 }
 
-impl<'a, T> TimewrapHandle<'a, T>
+impl<'a, T, S> TimewrapHandle<'a, T, S>
 where
     T: Time + Add<Output = T>,
 {
-    pub fn delay(self, time: T) -> At<'a, T> {
+    pub fn delay(self, time: T) -> At<'a, T, S> {
         At {
             timewrap: self.target,
             time: time + self.target.data.lock().current.clone(),
@@ -183,15 +224,15 @@ where
 }
 
 #[must_use]
-pub struct At<'a, T>
+pub struct At<'a, T, S>
 where
     T: Time,
 {
-    timewrap: &'a Timewrap<T>,
+    timewrap: &'a Timewrap<T, S>,
     time: T,
 }
 
-impl<'a, T> Future for At<'a, T>
+impl<'a, T, S> Future for At<'a, T, S>
 where
     T: Time,
 {
