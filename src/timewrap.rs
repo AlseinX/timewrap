@@ -59,13 +59,25 @@ where
     waitings: BinaryHeap<Waiting<T>>,
 }
 
-#[derive(Clone, Copy)]
 pub struct TimewrapHandle<'a, T, S>
 where
     T: Time,
 {
     target: &'a Timewrap<T, S>,
 }
+
+impl<'a, T, S> Clone for TimewrapHandle<'a, T, S>
+where
+    T: Time,
+{
+    fn clone(&self) -> Self {
+        Self {
+            target: self.target,
+        }
+    }
+}
+
+impl<'a, T, S> Copy for TimewrapHandle<'a, T, S> where T: Time {}
 
 impl<'a, T, S> Deref for TimewrapHandle<'a, T, S>
 where
