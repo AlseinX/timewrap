@@ -165,6 +165,10 @@ where
         }
     }
 
+    pub fn current_time(&self) -> T {
+        self.data.data.lock().current.clone()
+    }
+
     pub fn state(&self) -> &S {
         &self.data.state
     }
@@ -266,6 +270,10 @@ where
             timewrap: self.target,
             time,
         }
+    }
+
+    pub fn current_time(self) -> T {
+        self.target.data.lock().current.clone()
     }
 
     pub fn spawn(self, f: impl Future<Output = ()> + Send + 'a) {
