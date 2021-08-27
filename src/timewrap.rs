@@ -3,8 +3,9 @@ mod waiting;
 
 use core::{
     future::Future,
+    marker::PhantomData,
     mem,
-    ops::{Add, Deref},
+    ops::{Add, Deref, DerefMut},
     pin::Pin,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::Poll,
@@ -214,30 +215,6 @@ where
         );
     }
 
-    async fn inner_drive(&self, time: T) {
-        let mut this = self.data.data.lock();
-        while let Some(w) = this.waitings.peek() {
-            if w.time > time {
-                break;
-            }
-            let w = this.waitings.pop().unwrap();
-            this.current = w.time;
-            let mut task = this.tasks.remove(&w.id).unwrap();
-            drop(this);
-            self.data.is_by_time.store(false, Ordering::Relaxed);
-            self.data.current_id.store(w.id, Ordering::Relaxed);
-            let pause = PauseWhen(&mut task, || {
-                self.data.is_by_time.swap(false, Ordering::Relaxed)
-            })
-            .await;
-            this = self.data.data.lock();
-            if pause.is_pending() {
-                this.tasks.insert(w.id, task);
-            };
-        }
-        this.current = time;
-    }
-
     pub async fn drive(&mut self, time: T) {
         self.inner_drive(time).await
     }
@@ -258,6 +235,69 @@ where
     #[cfg(feature = "drive_block")]
     pub fn drive_shared_block(&self, time: T) {
         futures::executor::block_on(self.drive_shared(time));
+    }
+
+    async fn inner_drive(&self, time: T) {
+        let mut this = Erase::<_, 8>::new(self.data.data.lock());
+        while let Some(w) = this.waitings.peek() {
+            if w.time > time {
+                break;
+            }
+            let w = this.waitings.pop().unwrap();
+            this.current = w.time;
+            let mut task = this.tasks.remove(&w.id).unwrap();
+            drop(this);
+            self.data.is_by_time.store(false, Ordering::Relaxed);
+            self.data.current_id.store(w.id, Ordering::Relaxed);
+            let pause = PauseWhen(&mut task, || {
+                self.data.is_by_time.swap(false, Ordering::Relaxed)
+            })
+            .await;
+            this = Erase::new(self.data.data.lock());
+            if pause.is_pending() {
+                this.tasks.insert(w.id, task);
+            };
+        }
+        this.current = time;
+    }
+}
+
+struct Erase<T, const SIZE: usize> {
+    data: [u8; SIZE],
+    _phantom: PhantomData<dyn AsRef<T>>,
+}
+
+unsafe impl<T: Send, const SIZE: usize> Send for Erase<T, SIZE> {}
+unsafe impl<T: Sync, const SIZE: usize> Sync for Erase<T, SIZE> {}
+
+impl<T, const SIZE: usize> Erase<T, SIZE> {
+    pub fn new(v: T) -> Self {
+        debug_assert_eq!(mem::size_of::<T>(), SIZE);
+        let s = Self {
+            data: unsafe { (&v as *const T as *const [u8; SIZE]).read() },
+            _phantom: PhantomData,
+        };
+        mem::forget(v);
+        s
+    }
+}
+
+impl<T, const SIZE: usize> Deref for Erase<T, SIZE> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        unsafe { *(&&self.data as *const &[u8; SIZE] as *const &T) }
+    }
+}
+
+impl<T, const SIZE: usize> DerefMut for Erase<T, SIZE> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { *(&mut &mut self.data as *mut &mut [u8; SIZE] as *mut &mut T) }
+    }
+}
+
+impl<T, const SIZE: usize> Drop for Erase<T, SIZE> {
+    fn drop(&mut self) {
+        unsafe { ((&mut **self) as *mut T).drop_in_place() }
     }
 }
 
