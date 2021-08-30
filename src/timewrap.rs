@@ -1,11 +1,10 @@
-mod pause_when;
+mod futures;
 mod waiting;
 
 use core::{
     future::Future,
-    marker::PhantomData,
     mem,
-    ops::{Add, Deref, DerefMut},
+    ops::{Add, Deref},
     pin::Pin,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
     task::Poll,
@@ -17,7 +16,7 @@ use parking_lot::Mutex;
 
 use waiting::Waiting;
 
-use self::pause_when::PauseWhen;
+use self::futures::*;
 
 #[macro_export]
 macro_rules! async_fn {
@@ -50,7 +49,7 @@ where
     is_by_time: AtomicBool,
     current_id: AtomicUsize,
     #[cfg(feature = "drive_shared")]
-    shared_lock: futures::lock::Mutex<()>,
+    shared_lock: ::futures::lock::Mutex<()>,
 }
 
 impl<T, S> Deref for Timewrap<T, S>
@@ -161,7 +160,7 @@ where
                 is_by_time: AtomicBool::new(false),
                 current_id: AtomicUsize::new(0),
                 #[cfg(feature = "drive_shared")]
-                shared_lock: futures::lock::Mutex::new(()),
+                shared_lock: ::futures::lock::Mutex::new(()),
             }),
         }
     }
@@ -228,13 +227,13 @@ where
 
     #[cfg(feature = "drive_block")]
     pub fn drive_block(&mut self, time: T) {
-        futures::executor::block_on(self.drive(time));
+        ::futures::executor::block_on(self.drive(time));
     }
 
     #[cfg(feature = "drive_shared")]
     #[cfg(feature = "drive_block")]
     pub fn drive_shared_block(&self, time: T) {
-        futures::executor::block_on(self.drive_shared(time));
+        ::futures::executor::block_on(self.drive_shared(time));
     }
 
     async fn inner_drive(&self, time: T) {
@@ -259,45 +258,6 @@ where
             };
         }
         this.current = time;
-    }
-}
-
-struct Erase<T, const SIZE: usize> {
-    data: [u8; SIZE],
-    _phantom: PhantomData<dyn AsRef<T>>,
-}
-
-unsafe impl<T: Send, const SIZE: usize> Send for Erase<T, SIZE> {}
-unsafe impl<T: Sync, const SIZE: usize> Sync for Erase<T, SIZE> {}
-
-impl<T, const SIZE: usize> Erase<T, SIZE> {
-    pub fn new(v: T) -> Self {
-        debug_assert_eq!(mem::size_of::<T>(), SIZE);
-        let s = Self {
-            data: unsafe { (&v as *const T as *const [u8; SIZE]).read() },
-            _phantom: PhantomData,
-        };
-        mem::forget(v);
-        s
-    }
-}
-
-impl<T, const SIZE: usize> Deref for Erase<T, SIZE> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        unsafe { *(&&self.data as *const &[u8; SIZE] as *const &T) }
-    }
-}
-
-impl<T, const SIZE: usize> DerefMut for Erase<T, SIZE> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        unsafe { *(&mut &mut self.data as *mut &mut [u8; SIZE] as *mut &mut T) }
-    }
-}
-
-impl<T, const SIZE: usize> Drop for Erase<T, SIZE> {
-    fn drop(&mut self) {
-        unsafe { ((&mut **self) as *mut T).drop_in_place() }
     }
 }
 
